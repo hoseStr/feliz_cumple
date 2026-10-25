@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ASCII Lily Bouquet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Pacifico&display=swap">
+<!-- PyScript: ejecuta ramo_de_flores.py en el navegador (Pyodide) -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://pyscript.net/releases/2026.7.3/core.css">
+<script type="module" src="https://pyscript.net/releases/2026.7.3/core.js"></script>
+<style>
+  /* Layout: lienzo a pantalla completa, una barra mínima abajo. Look único oscuro (pantalla de terminal de noche). */
+  :root {
+    --bg: #050507;
+    --ink: #e8e2d4;
+    --dim: #7c7668;
+    --line: #2a2722;
+    --accent: #e8473b;
+    --rosa: #f08cb4;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding-top: 10px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    font: 400 11px/1.4 var(--mono); color: var(--dim); letter-spacing: 0.04em;
+    pointer-events: none;
+  }
+  .bar b { color: var(--ink); font-weight: 600; }
+  .bar button {
+    pointer-events: auto;
+    font: 600 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink); background: transparent;
+    border: 1px solid var(--line); border-radius: 2px; padding: 8px 12px; cursor: pointer;
+  }
+  .bar button:hover { border-color: var(--accent); color: var(--accent); }
+  .bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bar .acciones { display: flex; gap: 8px; }
+  .bar #musica[aria-pressed="false"] { color: var(--dim); text-decoration: line-through; }
+  @media (max-width: 520px) { .bar .pista { display: none; } }
+
+  /* Pantalla de regalo. El regalo y su nombre los dibuja ramo_de_flores.py en el canvas, dentro
+     del recuadro #escena; mientras Python carga se ve ahí una captura de ese mismo dibujo
+     (portada.webp), que se funde con la versión en vivo cuando está lista. */
+  .intro {
+    position: fixed; inset: 0; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    padding: 16px; background: var(--bg); text-align: center;
+    transition: background-color .8s ease, opacity .9s ease, visibility 0s linear .9s;
+  }
+  .intro.lista { background-color: transparent; }
+  .intro.abierto { opacity: 0; visibility: hidden; }
+  .escena { position: relative; width: min(92vw, 59vh); width: min(92vw, 59dvh); aspect-ratio: 1.7 / 1.85; }
+  .escena img { position: absolute; inset: 0; width: 100%; height: 100%; transition: opacity .8s ease; }
+  .intro.lista .escena img { opacity: 0; }
+  .oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; font-family: "Pacifico", cursive; }
+  #abrir {
+    font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--dim); background: transparent;
+    border: 1px solid var(--line); border-radius: 2px; padding: 12px 18px;
+  }
+  #abrir:not(:disabled) { color: var(--ink); border-color: var(--rosa); cursor: pointer; }
+  #abrir:not(:disabled):hover { color: var(--rosa); }
+  #abrir:focus-visible { outline: 2px solid var(--rosa); outline-offset: 3px; }
+  .intro:has(#abrir:not(:disabled)) { cursor: pointer; }
+  .cursor { animation: parpadeo 1s steps(1) infinite; }
+  @keyframes parpadeo { 50% { opacity: 0; } }
+  /* la barra aparece cuando, abierto el regalo, empieza el ramo */
+  .bar { transition: opacity .9s ease 1.4s; }
+  body:not(.abierto) .bar { opacity: 0; visibility: hidden; }
+  @media (prefers-reduced-motion: reduce) {
+    .intro, .escena img, .bar { transition: none; }
+    .cursor { animation: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Ramo de lirios dibujado con caracteres ASCII que crece y florece"></canvas>
+<div class="bar">
+  <div class="acciones">
+    <button id="musica" type="button" aria-pressed="true">♪ Música</button>
+    <button id="replay" type="button">Replantar</button>
+  </div>
+</div>
+
+<div class="intro" id="intro">
+  <h1 class="oculto">Para Dani</h1>
+  <div class="escena" id="escena"><img src="./portada.webp" alt="" fetchpriority="high"></div>
+  <button id="abrir" type="button" disabled aria-live="polite">preparando tu regalo<span class="cursor">▌</span></button>
+</div>
+
+<script src="./pintor.js"></script>
+<script type="py" src="./ramo_de_flores.py" config='{"packages": ["numpy"]}'></script>
+</body>
+</html>
