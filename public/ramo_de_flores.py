@@ -1447,26 +1447,16 @@ def ascii_cells(cel, fseed, last, out, colores):
     colores += STYLES[key[new]].tolist()
 
 
-# ---------- música: "Cumpleaños feliz" en caja de música ----------
-# Melodía tradicional (de dominio público), sintetizada aquí mismo con Web Audio: no hay archivos
-# de audio. Notas y duraciones en pulsos; "Da-ni" cae en el pulso 16.
-MELODIA = (("G4", .75), ("G4", .25), ("A4", 1), ("G4", 1), ("C5", 1), ("B4", 2),
-           ("G4", .75), ("G4", .25), ("A4", 1), ("G4", 1), ("D5", 1), ("C5", 2),
-           ("G4", .75), ("G4", .25), ("G5", 1), ("E5", 1), ("C5", 1), ("B4", 1), ("A4", 1),
-           ("F5", .75), ("F5", .25), ("E5", 1), ("C5", 1), ("D5", 1), ("C5", 3))
-PULSO_DANI = 16
-# acompañamiento: bajo en el primer pulso de cada compás y el acorde arpegiado, suave
-ACORDES = ((1, "C3", "G3", "E4"), (4, "G2", "F3", "B3"), (7, "G2", "F3", "B3"), (10, "C3", "G3", "E4"),
-           (13, "C3", "G3", "E4"), (16, "F2", "C3", "A3"), (19, "C3", "G3"), (21, "G2"))
-ACOMPANAMIENTO = [(p + i, nota, (0.42, 0.2, 0.2)[i]) for p, *notas in ACORDES for i, nota in enumerate(notas)]
-ACOMPANAMIENTO += [(22, "C3", 0.45), (22.08, "G3", 0.3), (22.16, "E4", 0.3), (22.24, "C5", 0.3)]  # acorde final
+# ---------- música: la canción (public/cancion.mp3) y la campanita al abrir ----------
+# La canción la toca un <audio>; la campanita se sintetiza con Web Audio.
 # timbre de caja de música: múltiplo de la frecuencia, volumen y cuánto dura (fracción del decaimiento)
 PARCIALES = ((1, 1.0, 1.0), (2, 0.28, 0.45), (3, 0.1, 0.22), (6.27, 0.05, 0.05))
 SEMITONO = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 VOLUMEN = 0.32
 boton_musica = document.getElementById("musica")
+cancion = document.getElementById("cancion")
 musica_on = True
-ac = master = eco = pista = None
+ac = master = eco = pista = espera_cancion = None
 
 
 def frecuencia(nota):
@@ -1476,13 +1466,16 @@ def frecuencia(nota):
 
 def iniciar_audio():
     # tiene que crearse durante el toque: los navegadores no dejan sonar nada antes
-    global ac, master, eco
-    Ctx = getattr(window, "AudioContext", None) or getattr(window, "webkitAudioContext", None)
-    if Ctx is None:
-        return
+    global ac, master, eco, pista
     sesion = getattr(window.navigator, "audioSession", None)
     if sesion is not None:  # iPhone (Safari 16.4+): que suene aunque el interruptor de silencio esté activado
         sesion.type = "playback"
+    # iPhone solo deja que un <audio> suene más tarde si ya se le dio play durante un toque
+    cancion.play().then(create_once_callable(lambda *_: espera_cancion is not None and cancion.pause())) \
+        .catch(create_once_callable(lambda *_: None))
+    Ctx = getattr(window, "AudioContext", None) or getattr(window, "webkitAudioContext", None)
+    if Ctx is None:
+        return
     ac = Ctx.new()
     comp = ac.createDynamicsCompressor()
     comp.connect(ac.destination)
@@ -1504,6 +1497,9 @@ def iniciar_audio():
     vuelta.connect(eco)
     eco.connect(salida)
     salida.connect(master)
+    pista = ac.createGain()
+    pista.connect(master)
+    pista.connect(eco)
 
 
 def campanita(nota, t, vel, decae):
@@ -1522,34 +1518,31 @@ def campanita(nota, t, vel, decae):
         osc.stop(fin + 0.05)
 
 
+def sonar_cancion():
+    global espera_cancion
+    espera_cancion = None
+    cancion.currentTime = 0
+    cancion.play().catch(create_once_callable(lambda *_: None))
+
+
 def tocar_cancion(retraso=0):
-    # la canción arranca junto con el ramo (`retraso` s desde ahora)
-    global pista
-    if ac is None:
-        return
-    ahora = ac.currentTime
-    if pista is not None:  # al replantar, la versión anterior se apaga en un instante
-        vieja = pista
-        vieja.gain.setTargetAtTime(0, ahora, 0.04)
-        window.setTimeout(create_once_callable(lambda: vieja.disconnect()), 600)
-    pista = ac.createGain()
-    pista.connect(master)
-    pista.connect(eco)
-    # el tempo se ajusta para que "Da-ni" suene justo cuando empieza a escribirse "Dani"
-    pulso = msg.filas[-1].t / PULSO_DANI if not RM else 0.54
-    inicio = ahora + retraso + 0.05
-    p = 0
-    for nota, dur in MELODIA:
-        campanita(nota, inicio + p * pulso, 0.5, 1.8)
-        p += dur
-    for p, nota, vel in ACOMPANAMIENTO:
-        campanita(nota, inicio + p * pulso, vel, 2.4)
+    # la canción arranca desde el principio junto con el ramo (`retraso` s desde ahora)
+    global espera_cancion
+    if espera_cancion is not None:
+        window.clearTimeout(espera_cancion)
+        espera_cancion = None
+    if retraso:
+        cancion.pause()
+        espera_cancion = window.setTimeout(create_once_callable(sonar_cancion), retraso * 1000)
+    else:
+        sonar_cancion()
 
 
 def alternar_musica(*_):
     global musica_on
     musica_on = not musica_on
     boton_musica.setAttribute("aria-pressed", "true" if musica_on else "false")
+    cancion.muted = not musica_on  # en iPhone el volumen de un <audio> no se puede cambiar, silenciar sí
     if master is not None:
         master.gain.setTargetAtTime(VOLUMEN if musica_on else 0, ac.currentTime, 0.08)
 
