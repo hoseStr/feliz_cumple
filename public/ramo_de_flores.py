@@ -120,7 +120,7 @@ ORDENES = (*METODOS, "createLinearGradient", "createRadialGradient", "fillText",
            "fillStyle", "strokeStyle", "lineWidth", "lineCap", "font", "textAlign", "textBaseline", "globalAlpha")
 INDICE = {nombre: i for i, nombre in enumerate(ORDENES)}
 # tipos de orden (pintor.js los interpreta igual)
-LLAMAR, CREAR_DEGRADADO, PROP_NUMERO, PROP_TEXTO, PROP_DEGRADADO, PARADA_COLOR, LLAMAR_TEXTO = range(7)
+LLAMAR, CREAR_DEGRADADO, PROP_NUMERO, PROP_TEXTO, PROP_DEGRADADO, PARADA_COLOR, LLAMAR_TEXTO, BASE = range(8)
 
 
 def cabecera(tipo, nombre, n):
@@ -135,10 +135,12 @@ class Escena:
     def __init__(self, ctx):
         object.__setattr__(self, "ctx", ctx)
         object.__setattr__(self, "nombres", to_js(list(ORDENES)))
+        object.__setattr__(self, "guardados", {})  # bloques que se repiten (ver repetir)
+        object.__setattr__(self, "u", None)  # el grosor de línea (U) con que se grabaron
         self._vaciar()
 
     def _vaciar(self):
-        object.__setattr__(self, "ordenes", [])  # lista plana de números; se pasa a Float64Array al final
+        object.__setattr__(self, "ordenes", array("d"))  # números en plano, listos para el Float64Array
         object.__setattr__(self, "textos", [])
         object.__setattr__(self, "n_degradados", 0)
 
@@ -174,10 +176,36 @@ class Escena:
     def fillText(self, texto, x, y):
         self.ordenes.extend((CAB_TEXTO, self._texto(texto), x, y))
 
+    def repetir(self, clave, dibujar):
+        # algo que se ve igual en cada cuadro (dónde va lo pone la transformación de afuera, como
+        # un lirio ya abierto que solo se mece): se graba una vez y después se copia tal cual.
+        # Sus textos y degradados se cuentan desde 0; la orden BASE le dice a pintor.js desde
+        # dónde empiezan en este cuadro
+        bloque = self.guardados.get(clave)
+        if bloque is None:
+            antes = self.ordenes, self.textos, self.n_degradados
+            self._vaciar()
+            dibujar()
+            bloque = self.guardados[clave] = (self.ordenes, self.textos, self.n_degradados)
+            for nombre, valor in zip(("ordenes", "textos", "n_degradados"), antes):
+                object.__setattr__(self, nombre, valor)
+        ordenes, textos, n = bloque
+        self.ordenes.extend((CAB_BASE, len(self.textos), self.n_degradados))
+        self.ordenes.extend(ordenes)
+        self.ordenes.extend((CAB_BASE, 0, 0))
+        self.textos.extend(textos)
+        object.__setattr__(self, "n_degradados", self.n_degradados + n)
+
+    def escala(self, u):
+        # con otro tamaño de ramo cambian los grosores de línea: lo guardado ya no sirve
+        if u != self.u:
+            self.guardados.clear()
+            object.__setattr__(self, "u", u)
+
     def getImageData(self, *args):
         # antes de leer los píxeles se ejecuta todo lo grabado en este cuadro
         datos = window.Float64Array.new(len(self.ordenes))
-        datos.assign(array("d", self.ordenes))
+        datos.assign(self.ordenes)
         window.reproducirEscena(self.ctx, datos, "\n".join(self.textos), self.nombres)
         self._vaciar()
         return self.ctx.getImageData(*args)
@@ -194,6 +222,7 @@ def _orden(nombre, n):
 for _nombre, _n in METODOS.items():
     setattr(Escena, _nombre, _orden(_nombre, _n))
 CAB_TEXTO = cabecera(LLAMAR_TEXTO, "fillText", 3)  # texto, x, y
+CAB_BASE = cabecera(BASE, "", 2)  # primer texto y primer degradado del bloque
 
 
 class Degradado:
@@ -422,6 +451,14 @@ def draw_leaf(x, y, ang, L, w, bend, sc):
     octx.save()
     octx.translate(x, y)
     octx.rotate(ang)
+    if sc >= 1:  # ya crecida: su forma no cambia, solo dónde está
+        octx.repetir(("hoja", L, w, bend), lambda: hoja(L, w, bend))
+    else:
+        hoja(L, w, bend)
+    octx.restore()
+
+
+def hoja(L, w, bend):
     g = octx.createLinearGradient(0, 0, L, 0)
     g.addColorStop(0, LEAF_STOPS[0])
     g.addColorStop(0.4, LEAF_STOPS[1])
@@ -438,7 +475,6 @@ def draw_leaf(x, y, ang, L, w, bend, sc):
     octx.moveTo(0, 0)
     octx.quadraticCurveTo(L * 0.5, bend * L * 0.12, L * 0.95, bend * L * 0.33)
     octx.stroke()
-    octx.restore()
 
 
 def petal(L, w, tonos, k, o, e):
@@ -482,13 +518,21 @@ def petal(L, w, tonos, k, o, e):
 def draw_lily(o, cx, cy, axis, g, e):
     if g <= 0.01:
         return
+    octx.save()
+    octx.translate(cx, cy)
+    if g >= 1 and e >= 1:  # ya abierto: la flor no cambia, solo dónde está
+        octx.repetir(("lirio", o.seed), lambda: flor(o, axis, g, e))
+    else:
+        flor(o, axis, g, e)
+    octx.restore()
+
+
+def flor(o, axis, g, e):
     p = o.pal
     ct = 0.12 + 0.1 * g if o.bud else min(1, 0.22 * g + smooth(0, 0.55, e) * 0.85)
     C = Pal(mix(GREEN.d, p.d, ct), mix(GREEN.b, p.b, ct), mix(GREEN.l, p.l, ct))
     pintas = css(C.d, 0.9 * smooth(0.4, 0.9, e)) if p.spot and e > 0.4 else None
     tonos = (css(C.d), css(C.b), css(C.l), css(C.l, 0.5), pintas)
-    octx.save()
-    octx.translate(cx, cy)
     tl = 1 + (o.tilt - 1) * e  # perspectiva: algunos se ven de lado
     octx.rotate(o.tiltAng)
     octx.scale(1, tl)
@@ -542,7 +586,6 @@ def draw_lily(o, cx, cy, axis, g, e):
         octx.beginPath()
         octx.arc(math.cos(pa) * pl, math.sin(pa) * pl, U * 1.2, 0, TAU)
         octx.fill()
-    octx.restore()
 
 
 # ---------- listón ----------
@@ -719,7 +762,8 @@ medidor = document.createElement("canvas").getContext("2d")  # solo para medir t
 document.fonts.load(f"40px {FUENTE_MSG}")  # por si la página todavía no la pidió
 fuente_lista = False
 msg = None
-BARRA = 54  # alto de la barra inferior, en px
+BARRA = 54  # alto mínimo de la barra inferior, en px
+barra = document.querySelector(".bar")
 
 # dedicatoria: se escribe a máquina bajo el título cuando este termina, hecha de caracteres
 # como todo lo demás; la posición la decide componer()
@@ -849,6 +893,8 @@ def sobra(linea, ded):
 def componer():
     # dónde va el mensaje y adónde se desplaza el ramo para dejarle sitio
     global msg
+    # la barra crece en celulares con zona inferior reservada (la del gesto de inicio del iPhone)
+    abajo = max(BARRA, H - barra.getBoundingClientRect().top + 3)
     u = {t: ancho_texto(t, 100) / 100 for t in ("Feliz Cumpleaños", "Feliz", "Cumpleaños", "Dani")}  # ancho por px
     if W >= H * 1.15:
         # horizontal: el ramo se corre a la izquierda y el mensaje queda a su derecha, en dos líneas
@@ -863,7 +909,7 @@ def componer():
         ded = dedicatoria_en(2 * min(gap + tw / 2, W - 16 - xc))  # sin pisar el ramo ni el borde
         alto = sum(px * f for _, px, _, f in lineas)
         y = BY0 - 0.6 * S0 - alto / 2  # centrado con el ramo
-        y = min(y, H - BARRA - alto - sobra(lineas[-1], ded))  # sin que la dedicatoria llegue a la barra
+        y = min(y, H - abajo - alto - sobra(lineas[-1], ded))  # sin que la dedicatoria llegue a la barra
     else:
         # vertical: el ramo sube (y se achica lo necesario) y el mensaje queda debajo, en tres
         # líneas para que la letra tenga altura suficiente en las celdas gruesas de un celular
@@ -872,7 +918,7 @@ def componer():
         lineas = [("Feliz", s1 * 1.2, TONO_1, 1.1), ("Cumpleaños", s1, TONO_1, 1.25), ("Dani", s2, TONO_2, 1.2)]
         ded = dedicatoria_en(W - 32)
         alto = sum(px * f for _, px, _, f in lineas) + sobra(lineas[-1], ded)  # con la dedicatoria debajo
-        arriba, abajo = H * 0.03, BARRA  # margen superior y alto de la barra inferior
+        arriba = H * 0.03  # margen superior
         libre = H - arriba - abajo
         S1 = min(S0, (libre - alto) / 1.21)
         by1 = arriba + (libre - 1.21 * S1 - alto) / 2 + 1.15 * S1
@@ -1293,6 +1339,7 @@ def draw_bouquet(T):
     bx = BX0 + (msg.bx1 - BX0) * k
     by = BY0 + (msg.by1 - BY0) * k
     U = cw / S
+    octx.escala(U)
     octx.setTransform(S / cw, 0, 0, S / ch, bx / cw, by / ch)
 
     # estado de cada tallo (con vaivén leve)
@@ -1384,6 +1431,10 @@ def ascii_cells(cel, fseed, last, out, colores):
     G = np.minimum(255, g * k).astype(np.int64) >> 3
     B = np.minimum(255, b * k).astype(np.int64) >> 3
     key = (R << 10) | (G << 5) | B
+    # agrupadas por color (cada glifo cae en su celda, el orden no se nota): así fillStyle,
+    # que es lo que más cuesta en pintor.js, se fija una vez por color y no en cada cambio
+    orden = np.argsort(key, kind="stable")
+    x, y, idx, key = x[orden], y[orden], idx[orden], key[orden]
     # el color solo se fija cuando cambia respecto a la celda anterior
     new = np.empty(key.size, bool)
     new[0] = True
@@ -1510,6 +1561,13 @@ intro = document.getElementById("intro")
 boton_abrir = document.getElementById("abrir")
 t0 = t_toque = 0
 abierto = lista = False
+# En pantallas táctiles, si un cuadro no alcanza a dibujarse en 1/60 s, se dibujan 30 por
+# segundo parejos (se ven más fluidos que un ritmo que salta), y 20 cuando ya todo apareció y
+# solo queda el vaivén (los caracteres cambian 8 veces por segundo: no se nota). Como todo se
+# anima por tiempo, solo cambia cuántas veces por segundo se dibuja.
+TACTIL = window.matchMedia("(pointer: coarse)").matches
+costo = 0  # cuánto tarda en dibujarse un cuadro, en ms (promedio móvil)
+ultimo = -1e9  # cuándo se dibujó el último cuadro
 
 
 def restart(*_, retraso=0):
@@ -1520,7 +1578,13 @@ def restart(*_, retraso=0):
 
 
 def frame(now):
-    global lista
+    global lista, costo, ultimo
+    if TACTIL and costo > 14:
+        quieto = abierto and (now - t0) / 1000 > msg.ded.t + msg.ded.tiempos[-1] + 1
+        if now - ultimo < 1000 / (20 if quieto else 30) - 4:
+            window.requestAnimationFrame(frame_proxy)
+            return
+    ultimo, inicio = now, window.performance.now()
     vigilar_fuente()
     tc = now / 1000
     if abierto:
@@ -1530,6 +1594,7 @@ def frame(now):
         A, T = 0, -1
     draw_scene(T, tc, A)
     ascii_pass(T if T >= 0 else tc)
+    costo += (window.performance.now() - inicio - costo) * 0.1
     if not lista and fuente_lista:
         # la portada en vivo ya se ve como la captura: se funden y se puede abrir
         lista = True

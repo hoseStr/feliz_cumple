@@ -7,6 +7,7 @@
 window.reproducirEscena = (ctx, ordenes, textos, nombres) => {
   textos = textos.split('\n');
   const degradados = [];
+  let tb = 0, gb = 0;  // desde dónde se cuentan textos y degradados (un bloque que se repite)
   for (let i = 0; i < ordenes.length; ) {
     const c = ordenes[i], tipo = c >> 8, nombre = nombres[(c >> 3) & 31], n = c & 7;
     const a = ordenes.subarray(i + 1, i + 1 + n);
@@ -14,10 +15,11 @@ window.reproducirEscena = (ctx, ordenes, textos, nombres) => {
     if (tipo === 0) ctx[nombre].apply(ctx, a);                    // método con números
     else if (tipo === 1) degradados.push(ctx[nombre].apply(ctx, a)); // crea un degradado
     else if (tipo === 2) ctx[nombre] = a[0];                      // propiedad numérica
-    else if (tipo === 3) ctx[nombre] = textos[a[0]];              // color o lineCap
-    else if (tipo === 4) ctx[nombre] = degradados[a[0]];          // relleno con degradado
-    else if (tipo === 5) degradados[a[0]].addColorStop(a[1], textos[a[2]]); // parada de color
-    else ctx[nombre](textos[a[0]], a[1], a[2]);                   // fillText(texto, x, y)
+    else if (tipo === 3) ctx[nombre] = textos[tb + a[0]];         // color o lineCap
+    else if (tipo === 4) ctx[nombre] = degradados[gb + a[0]];     // relleno con degradado
+    else if (tipo === 5) degradados[gb + a[0]].addColorStop(a[1], textos[tb + a[2]]); // parada de color
+    else if (tipo === 6) ctx[nombre](textos[tb + a[0]], a[1], a[2]); // fillText(texto, x, y)
+    else { tb = a[0]; gb = a[1]; }                                // empieza o termina un bloque
   }
 };
 
