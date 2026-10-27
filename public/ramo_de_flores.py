@@ -3,6 +3,8 @@
 # ejecuta en el canvas, de una vez por cuadro, las llamadas que este archivo prepara.
 import math
 from array import array
+from bisect import bisect_right
+from itertools import groupby
 
 import numpy as np
 from pyodide.ffi import create_once_callable, create_proxy, to_js
@@ -717,11 +719,131 @@ medidor = document.createElement("canvas").getContext("2d")  # solo para medir t
 document.fonts.load(f"40px {FUENTE_MSG}")  # por si la página todavía no la pidió
 fuente_lista = False
 msg = None
+BARRA = 54  # alto de la barra inferior, en px
+
+# dedicatoria: se escribe a máquina bajo el título cuando este termina, hecha de caracteres
+# como todo lo demás; la posición la decide componer()
+DEDICATORIA = ("Que siempre encuentres sol para florecer.", "Gracias por ser tú <3")
+PASO, PAUSA_FRASE = 0.055, 0.5  # s por letra y pausa entre las dos frases
+TONO_DED = tuple(css(c) for _, c in TONO_1)  # los mismos tonos de "Feliz Cumpleaños"
+TONO_CURSOR = css(TONO_2[0][1])  # el rosa de "Dani"
+# Letra de píxeles: cada "#" es una celda, o sea un carácter del paso ASCII. A un tamaño que
+# quepa en un celular, una letra lisa como la del título se vuelve una mancha; esta cae justo
+# en las celdas, y es la más baja que se alcanza a leer. Filas de arriba abajo: 0-1 mayúsculas
+# y astas, 2-4 el cuerpo de las minúsculas, 5 las descendentes. Un carácter que no esté aquí
+# queda como espacio.
+PIXELES = {
+    " ": ".. ", ".": ". . . . #", ",": ". . . . # #", ":": ". . # . #", "-": "... ... ... ###",
+    "<": "..# .#. #.. .#. ..#", ">": "#.. .#. ..# .#. #..",
+    "0": ".#. #.# #.# #.# .#.", "1": ".#. ##. .#. .#. ###", "2": "##. ..# .#. #.. ###", "3": "##. ..# .#. ..# ##.",
+    "4": "#.# #.# ### ..# ..#", "5": "### #.. ##. ..# ##.", "6": ".## #.. ##. #.# .#.", "7": "### ..# .#. .#. .#.",
+    "8": ".#. #.# .#. #.# .#.", "9": ".#. #.# .## ..# ##.",
+    "'": "# #", "!": "# # # . #", "¡": "# . # # #", "?": "##. ..# .#. ... .#.", "¿": ".#. ... .#. #.. .##",
+    "a": "... ... .## #.# .##", "b": "#.. #.. ##. #.# ##.", "c": "... ... .## #.. .##", "d": "..# ..# .## #.# .##",
+    "e": "... ... .#. ### .##", "f": ".## #.. ##. #.. #..", "g": "... ... .## #.# .## ##.", "h": "#.. #.. ##. #.# #.#",
+    "i": "# . # # #", "j": ".# .. .# .# .# #.", "k": "#.. #.. #.# ##. #.#", "l": "#. #. #. #. .#",
+    "m": "..... ..... ####. #.#.# #.#.#", "n": "... ... ##. #.# #.#", "o": "... ... .#. #.# .#.",
+    "p": "... ... ##. #.# ##. #..", "q": "... ... .## #.# .## ..#", "r": "... ... #.# ##. #..",
+    "s": "... ... .## .#. ##.", "t": "... .#. ### .#. .##", "u": "... ... #.# #.# .##", "v": "... ... #.# #.# .#.",
+    "w": "..... ..... #...# #.#.# .#.#.", "x": "... ... #.# .#. #.#", "y": "... ... #.# #.# .## ##.",
+    "z": "... ... ##. .#. .##",
+    "á": "..# .#. .## #.# .##", "é": "..# .#. .#. ### .##", "í": ".# .. #. #. #.", "ó": "..# .#. .#. #.# .#.",
+    "ú": "..# .#. #.# #.# .##", "ü": "#.# ... #.# #.# .##", "ñ": "### ... ##. #.# #.#",
+    "A": ".#. #.# ### #.# #.#", "B": "##. #.# ##. #.# ##.", "C": ".## #.. #.. #.. .##", "D": "##. #.# #.# #.# ##.",
+    "E": "### #.. ##. #.. ###", "F": "### #.. ##. #.. #..", "G": ".## #.. #.# #.# .##", "H": "#.# #.# ### #.# #.#",
+    "I": "### .#. .#. .#. ###", "J": "..# ..# ..# #.# .#.", "K": "#.# #.# ##. #.# #.#", "L": "#.. #.. #.. #.. ###",
+    "M": "#...# ##.## #.#.# #...# #...#", "N": "#..# ##.# #.## #..# #..#", "O": ".#. #.# #.# #.# .#.",
+    "P": "##. #.# ##. #.. #..", "Q": ".#. #.# #.# #.# .##", "R": "##. #.# ##. #.# #.#", "S": ".## #.. .#. ..# ##.",
+    "T": "### .#. .#. .#. .#.", "U": "#.# #.# #.# #.# ###", "V": "#.# #.# #.# #.# .#.",
+    "W": "#...# #...# #.#.# #.#.# .#.#.", "X": "#.# #.# .#. #.# #.#", "Y": "#.# #.# .#. .#. .#.",
+    "Z": "### ..# .#. #.. ###",
+}
+ALTO_LETRA, FILAS_LINEA = 6, 7  # filas de una letra y de una línea a la siguiente
+CURSOR = (2, 5)  # ancho y alto del cursor, en celdas
+
+
+def _letra(dibujo):
+    # ancho en celdas y tramos encendidos (columna, fila, largo) de un dibujo de PIXELES
+    filas = dibujo.split()
+    tramos = []
+    for y, fila in enumerate(filas):
+        x = 0
+        for c, grupo in groupby(fila):
+            n = len(list(grupo))
+            if c == "#":
+                tramos.append((x, y, n))
+            x += n
+    return len(filas[0]), tramos
+
+
+LETRAS = {c: _letra(d) for c, d in PIXELES.items()}
+
+
+def letra(c):
+    return LETRAS.get(c, LETRAS[" "])
+
+
+def celdas_texto(texto):
+    # ancho en celdas de un texto en la letra de píxeles, con una celda entre letras
+    return sum(letra(c)[0] + 1 for c in texto) - 1
 
 
 def ancho_texto(texto, px):
     medidor.font = f"{px}px {FUENTE_MSG}"
     return medidor.measureText(texto).width
+
+
+def bajo_centro(texto):
+    # cuánto baja la tinta del texto bajo el centro de su fila (textBaseline "middle"), por px
+    medidor.font = f"100px {FUENTE_MSG}"
+    medidor.textBaseline = "middle"
+    return medidor.measureText(texto).actualBoundingBoxDescent / 100
+
+
+def envolver(palabras, ancho):
+    # palabra por palabra, mientras la línea quepa en `ancho` celdas
+    lineas = []
+    for p in palabras:
+        if lineas and celdas_texto(f"{lineas[-1]} {p}") <= ancho:
+            lineas[-1] += " " + p
+        else:
+            lineas.append(p)
+    return lineas
+
+
+def partir(frase, ancho):
+    # en líneas que quepan en `ancho` celdas y, como text-wrap: balance, lo más parejas posible
+    palabras = frase.split()
+    lineas = envolver(palabras, ancho)
+    while len(lineas) > 1:
+        otras = envolver(palabras, max(map(celdas_texto, lineas)) - 1)
+        if len(otras) > len(lineas):
+            break
+        lineas = otras
+    return lineas
+
+
+def dedicatoria_en(ancho):
+    # el texto en líneas que quepan en `ancho` px (sin contar el cursor), su alto y cuándo
+    # aparece cada letra y cada salto de línea (s desde que empieza)
+    lineas, tiempos, t = [], [], 0.4  # el cursor aparece un instante antes de la primera letra
+    for frase in DEDICATORIA:
+        for j, linea in enumerate(partir(frase, int(ancho / cw) - CURSOR[0] - 1)):
+            if lineas:  # entre frases, una pausa
+                t += PAUSA_FRASE if j == 0 else PASO
+                tiempos.append(t)
+            for _ in linea:
+                t += PASO
+                tiempos.append(t)
+            lineas.append(linea)
+    return Obj(gap=2 * ch, alto=((len(lineas) - 1) * FILAS_LINEA + ALTO_LETRA) * ch,
+               lineas=lineas, texto="\n".join(lineas), tiempos=tiempos)
+
+
+def sobra(linea, ded):
+    # cuánto baja la dedicatoria más allá de la fila de la última línea del título
+    texto, px, _, f = linea
+    return max(0, ded.gap + ded.alto - (f / 2 - bajo_centro(texto)) * px)
 
 
 def componer():
@@ -738,16 +860,19 @@ def componer():
         x0 = (W - (2 * hb + gap + tw)) / 2
         S1, bx1, by1 = S0, x0 + hb, BY0
         xc = x0 + 2 * hb + gap + tw / 2
+        ded = dedicatoria_en(2 * min(gap + tw / 2, W - 16 - xc))  # sin pisar el ramo ni el borde
         alto = sum(px * f for _, px, _, f in lineas)
         y = BY0 - 0.6 * S0 - alto / 2  # centrado con el ramo
+        y = min(y, H - BARRA - alto - sobra(lineas[-1], ded))  # sin que la dedicatoria llegue a la barra
     else:
         # vertical: el ramo sube (y se achica lo necesario) y el mensaje queda debajo, en tres
         # líneas para que la letra tenga altura suficiente en las celdas gruesas de un celular
         s1 = W * 0.9 / u["Cumpleaños"]
         s2 = min(s1 * 1.6, W * 0.66 / u["Dani"])
         lineas = [("Feliz", s1 * 1.2, TONO_1, 1.1), ("Cumpleaños", s1, TONO_1, 1.25), ("Dani", s2, TONO_2, 1.2)]
-        alto = sum(px * f for _, px, _, f in lineas)
-        arriba, abajo = H * 0.03, 54  # margen superior y alto de la barra inferior
+        ded = dedicatoria_en(W - 32)
+        alto = sum(px * f for _, px, _, f in lineas) + sobra(lineas[-1], ded)  # con la dedicatoria debajo
+        arriba, abajo = H * 0.03, BARRA  # margen superior y alto de la barra inferior
         libre = H - arriba - abajo
         S1 = min(S0, (libre - alto) / 1.21)
         by1 = arriba + (libre - 1.21 * S1 - alto) / 2 + 1.15 * S1
@@ -762,7 +887,26 @@ def componer():
         filas.append(Obj(texto=texto, px=px, y=y + alto_fila / 2, w=px * u[texto], tonos=tonos, t=t, dur=dur))
         y += alto_fila
         t += dur * 0.9
-    msg = Obj(S1=S1, bx1=bx1, by1=by1, xc=xc, filas=filas, fin=t + 0.3)
+    msg = Obj(S1=S1, bx1=bx1, by1=by1, xc=xc, filas=filas, fin=t + 0.3, ded=ded)
+    # la dedicatoria, justo bajo la tinta de la última línea; empieza ya escrito el título. Cada
+    # letra queda como tramos de celdas en su lugar (la línea, centrada como quedará completa,
+    # no se corre mientras se escribe), y para cada cantidad de letras, dónde va el cursor
+    ultima = filas[-1]
+    ded.t = msg.fin + 0.4
+    fila0 = js_round((ultima.y + bajo_centro(ultima.texto) * ultima.px + ded.gap) / ch)
+    ded.letras, ded.cursor = [], []
+    for i, linea in enumerate(ded.lineas):
+        x, y = js_round(xc / cw - celdas_texto(linea) / 2), fila0 + i * FILAS_LINEA
+        if i:
+            ded.letras.append(())  # el salto de línea
+        ded.cursor.append((x, y))
+        for c in linea:
+            ancho, tramos = letra(c)
+            ded.letras.append([(x + tx, y + ty, n) for tx, ty, n in tramos])
+            x += ancho + 1
+            ded.cursor.append((x, y))
+    ancho = max(map(celdas_texto, ded.lineas))
+    ded.borde = (js_round(xc / cw - ancho / 2), js_round(xc / cw + ancho / 2))  # el degradado va de borde a borde
 
 
 def vigilar_fuente():
@@ -831,6 +975,28 @@ def draw_message(T):
         p = 1 if RM else clamp((T - f.t) / f.dur)
         if p > 0:
             draw_text(f.texto, f.px, msg.xc, f.y, f.w, f.tonos, p, brillo)
+    draw_dedicatoria(T)
+
+
+def draw_dedicatoria(T):
+    # a máquina, letra por letra, con un cursor de bloque al final (como el de "preparando tu
+    # regalo▌"): fijo mientras escribe y parpadeando mientras espera
+    d = msg.ded
+    if T < d.t and not RM:
+        return
+    n = len(d.texto) if RM else bisect_right(d.tiempos, T - d.t)
+    octx.setTransform(1, 0, 0, 1, 0, 0)  # en celdas
+    octx.fillStyle = gradiente(d.borde[0], 0, d.borde[1], 0, *TONO_DED)
+    octx.beginPath()
+    for tramos in d.letras[:n]:
+        for x, y, largo in tramos:
+            octx.rect(x, y, largo, 1)
+    octx.fill()
+    if RM or 0 < n < len(d.texto) or (T - d.t) % 1 < 0.5:
+        octx.fillStyle = TONO_CURSOR
+        octx.beginPath()
+        octx.rect(*d.cursor[n], *CURSOR)
+        octx.fill()
 
 
 # ---------- portada: el regalo ----------
